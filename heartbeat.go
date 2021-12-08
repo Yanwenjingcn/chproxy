@@ -10,6 +10,9 @@ import (
 	"github.com/Vertamedia/chproxy/config"
 )
 
+/**
+	发给cluster 心跳
+ */
 type heartBeat struct {
 	interval time.Duration
 	timeout  time.Duration

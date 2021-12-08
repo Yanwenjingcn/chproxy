@@ -46,10 +46,13 @@ type Config struct {
 	// Whether to ignore security warnings
 	HackMePlease bool `yaml:"hack_me_please,omitempty"`
 
+	// user复用：网段
 	NetworkGroups []NetworkGroups `yaml:"network_groups,omitempty"`
 
+	// user复用
 	Caches []Cache `yaml:"caches,omitempty"`
 
+	// user复用，随着url请求发送给ck：Optional lists of query params to send with each proxied request to ClickHouse.
 	ParamGroups []ParamGroup `yaml:"param_groups,omitempty"`
 
 	// Catches all undefined fields

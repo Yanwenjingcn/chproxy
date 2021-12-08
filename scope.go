@@ -34,18 +34,18 @@ func newScopeID() scopeID {
 var nextScopeID = uint64(time.Now().UnixNano())
 
 type scope struct {
-	startTime   time.Time
-	id          scopeID
-	host        *host
+	startTime   time.Time //代码生成
+	id          scopeID //代码生成
+	host        *host // 代码轮询挑选
 	cluster     *cluster
 	user        *user
 	clusterUser *clusterUser
 
-	sessionId      string
-	sessionTimeout int
+	sessionId      string // 来自req
+	sessionTimeout int // 来自req
 
-	remoteAddr string
-	localAddr  string
+	remoteAddr string // 来自req
+	localAddr  string // 来自req
 
 	// is true when KillQuery has been called
 	canceled bool
@@ -53,6 +53,7 @@ type scope struct {
 	labels prometheus.Labels
 }
 
+// 每一个请求都会有一个
 func newScope(req *http.Request, u *user, c *cluster, cu *clusterUser, sessionId string, sessionTimeout int) *scope {
 	h := c.getHost()
 	if sessionId != "" {
@@ -86,6 +87,9 @@ func newScope(req *http.Request, u *user, c *cluster, cu *clusterUser, sessionId
 	return s
 }
 
+/**
+scope：打印的内容
+ */
 func (s *scope) String() string {
 	return fmt.Sprintf("[ Id: %s; User %q(%d) proxying as %q(%d) to %q(%d); RemoteAddr: %q; LocalAddr: %q; Duration: %d μs]",
 		s.id,
@@ -109,10 +113,13 @@ func (s *scope) incQueued() error {
 		"cluster_user": s.labels["cluster_user"],
 	}
 
+	// 前台用户的队列
 	if s.user.queueCh != nil {
 		select {
+		// 往user.queueCh 发送
 		case s.user.queueCh <- struct{}{}:
 			defer func() {
+				// 执行结束会再从队列中抽出一个
 				<-s.user.queueCh
 			}()
 		default:
@@ -126,6 +133,7 @@ func (s *scope) incQueued() error {
 		}
 	}
 
+	// cluster用户队列
 	if s.clusterUser.queueCh != nil {
 		select {
 		case s.clusterUser.queueCh <- struct{}{}:
@@ -148,6 +156,7 @@ func (s *scope) incQueued() error {
 	queueSize.Inc()
 	defer queueSize.Dec()
 
+	// 真正处理的位置
 	// Try starting the request during the given duration.
 	d := s.maxQueueTime()
 	dSleep := d / 10
@@ -159,6 +168,10 @@ func (s *scope) incQueued() error {
 	}
 	deadline := time.Now().Add(d)
 	for {
+		/**
+		限频啥的没问题
+		用户个人限制没问题的就跳出循环，否则超时了跳出循环并报错
+		*/
 		err := s.inc()
 		if err == nil {
 			// The request is allowed to start.
@@ -189,6 +202,9 @@ func (s *scope) incQueued() error {
 	}
 }
 
+/**
+	感觉像是在增加统计信息--普罗米修斯里面的
+ */
 func (s *scope) inc() error {
 	uQueries := s.user.queryCounter.inc()
 	cQueries := s.clusterUser.queryCounter.inc()
@@ -327,6 +343,7 @@ func (s *scope) decorateRequest(req *http.Request) (*http.Request, url.Values) {
 	// Make new params to purify URL.
 	params := make(url.Values)
 
+	// 配置文件里面的为每个用户设置的参数（需要细看），放在query的位置
 	// Set user params
 	if s.user.params != nil {
 		for _, param := range s.user.params.params {
@@ -334,7 +351,7 @@ func (s *scope) decorateRequest(req *http.Request) (*http.Request, url.Values) {
 		}
 	}
 
-	// Keep allowed params.
+	// Keep allowed params. ，放在query的位置
 	origParams := req.URL.Query()
 	for _, param := range allowedParams {
 		val := origParams.Get(param)
@@ -366,6 +383,7 @@ func (s *scope) decorateRequest(req *http.Request) (*http.Request, url.Values) {
 
 	req.URL.RawQuery = params.Encode()
 
+	// 用户替换
 	// Rewrite possible previous Basic Auth and send request
 	// as cluster user.
 	req.SetBasicAuth(s.clusterUser.name, s.clusterUser.password)
@@ -405,7 +423,7 @@ func (s *scope) getTimeoutWithErrMsg() (time.Duration, error) {
 
 func (s *scope) maxQueueTime() time.Duration {
 	d := s.user.maxQueueTime
-	if d <= 0 || s.clusterUser.maxQueueTime > 0 && s.clusterUser.maxQueueTime < d {
+	if d <= 0 || s.clusterUser.maxQueueTime > 0 && s.clusterUser.maxQueueTime < d { // 取用户和系统设置的最小值
 		d = s.clusterUser.maxQueueTime
 	}
 	if d <= 0 {

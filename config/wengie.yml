@@ -1,0 +1,32 @@
+#hack_me_please: true
+log_debug: true
+server:
+  http:
+    listen_addr: ":8888"
+    allowed_networks: ["127.0.0.0/24"]
+
+# chproxy自己的用户
+users:
+  - name: "wengie"
+    password: "940624"
+    to_cluster: "local_mac"
+    to_user: "wengie"
+
+  - name: "metabase_ck"
+    password: "940624"
+    to_cluster: "local_mac"
+    to_user: "wengie"
+
+  - name: "zhangsan"
+    password: "940624"
+    to_cluster: "local_mac"
+    to_user: "wengie"
+
+# ck真实的用户
+# by default each cluster has `default` user which can be overridden by section `users`
+clusters:
+  - name: "local_mac"
+    nodes: ["127.0.0.1:8123"]
+    users:
+      - name: "wengie"
+        password: "dIbXAgc2"

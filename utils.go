@@ -42,7 +42,11 @@ func getAuth(req *http.Request) (string, string) {
 		return name, pass
 	}
 	// if still no credentials - treat it as `default` user request
-	return "default", ""
+
+	// TODO：1。metabase 的用户获取
+
+	return "", ""
+	//return "default", ""
 }
 
 // getSessionId retrieves session id
@@ -68,6 +72,10 @@ func getSessionTimeout(req *http.Request) int {
 func getQuerySnippet(req *http.Request) string {
 	query := req.URL.Query().Get("query")
 	body := getQuerySnippetFromBody(req)
+
+	log.Debugf("query : %s", query)
+	log.Debugf("body : %s", body)
+	log.Debugf("header : %s", req.Header)
 
 	if len(query) != 0 && len(body) != 0 {
 		query += "\n"

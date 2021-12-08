@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/Vertamedia/chproxy/gateway"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -51,6 +52,7 @@ func newReverseProxy() *reverseProxy {
 
 func (rp *reverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	startTime := time.Now()
+
 	s, status, err := rp.getScope(req)
 	if err != nil {
 		q := getQuerySnippet(req)
@@ -59,6 +61,8 @@ func (rp *reverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// 它这个队列不是真正的队列，而是一个统一的计数值，一个判断只要通过了此判断就能够执行了。
+	// 为每个url请求都开启一个协程来处理。
 	// WARNING: don't use s.labels before s.incQueued,
 	// since `replica` and `cluster_node` may change inside incQueued.
 	if err := s.incQueued(); err != nil {
@@ -73,6 +77,7 @@ func (rp *reverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	log.Debugf("%s: request start", s)
 	requestSum.With(s.labels).Inc()
 
+	// 跨域
 	if s.user.allowCORS {
 		origin := req.Header.Get("Origin")
 		if len(origin) == 0 {
@@ -89,6 +94,28 @@ func (rp *reverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		ResponseWriter: rw,
 		bytesWritten:   responseBodyBytes.With(s.labels),
 	}
+
+
+	/**
+	gateway-step2：sql解析，（需要验证吗？）
+	法一：传sql，自行解析 （只要一次链接，推荐！）
+	法二：先sql解析，再验证权限。（虽然麻烦，但是灵活性更好）
+	 */
+
+	// TODO: 请求交互
+	/**
+	1. post\get 传递sql的位置不一样诶嘿。
+	 */
+	reqBody := getQuerySnippetFromBody(req)
+	_, permErr := gateway.CheckGatewayPermission(reqBody, s.user.name)
+	if permErr != nil {
+		limitExcess.With(s.labels).Inc()
+		q := getQuerySnippet(req)
+		err = fmt.Errorf("%s: %s; query: %q", s, err, q)
+		respondWith(rw, err, http.StatusProxyAuthRequired)
+		return
+	}
+
 
 	req, origParams := s.decorateRequest(req)
 
@@ -359,6 +386,7 @@ func (rp *reverseProxy) applyConfig(cfg *config.Config) error {
 		caches[cc.Name] = tmpCache
 	}
 
+	// 规整将随着url发送给ck的参数
 	params := make(map[string]*paramsRegistry, len(cfg.ParamGroups))
 	for _, p := range cfg.ParamGroups {
 		if _, ok := params[p.Name]; ok {
@@ -369,7 +397,7 @@ func (rp *reverseProxy) applyConfig(cfg *config.Config) error {
 			return fmt.Errorf("cannot initialize params %q: %s", p.Name, err)
 		}
 	}
-
+	// chproxy用户的信息初始化
 	profile := &usersProfile{
 		cfg:      cfg.Users,
 		clusters: clusters,
@@ -454,8 +482,18 @@ func (rp *reverseProxy) refreshCacheMetrics() {
 	}
 }
 
+/**
+1、从client来的请求解析 chproxy的用户名密码用与校验
+2、找到client用户对应的 cluster 信息
+3、找到sessionid与session超时时长
+4、其它限制校验：例如ip、网络、请求类型等
+ */
 func (rp *reverseProxy) getScope(req *http.Request) (*scope, int, error) {
 	name, password := getAuth(req)
+	if name == "" || password == "" {
+		return nil, http.StatusUnauthorized, fmt.Errorf("invalid username or password for user %q", name)
+	}
+
 	sessionId := getSessionId(req)
 	sessionTimeout := getSessionTimeout(req)
 	var (
@@ -465,6 +503,14 @@ func (rp *reverseProxy) getScope(req *http.Request) (*scope, int, error) {
 	)
 
 	rp.lock.RLock()
+
+	isOk, pwErr := gateway.CheckUserPw(name, password)
+	if !isOk {
+		log.Errorf("check user password  err:%s", pwErr)
+	}
+
+	// TODO:2. 用户对应集群信息映射。【目测，这个可以用对应的配置，统一代理到一个ck账号】
+
 	u = rp.users[name]
 	if u != nil {
 		// c and cu for toCluster and toUser must exist if applyConfig
@@ -478,18 +524,18 @@ func (rp *reverseProxy) getScope(req *http.Request) (*scope, int, error) {
 	if u == nil {
 		return nil, http.StatusUnauthorized, fmt.Errorf("invalid username or password for user %q", name)
 	}
-	if u.password != password {
-		return nil, http.StatusUnauthorized, fmt.Errorf("invalid username or password for user %q", name)
-	}
-	if u.denyHTTP && req.TLS == nil {
-		return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access via http", u.name)
-	}
-	if u.denyHTTPS && req.TLS != nil {
-		return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access via https", u.name)
-	}
-	if !u.allowedNetworks.Contains(req.RemoteAddr) {
-		return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access", u.name)
-	}
+	//if u.password != password {
+	//	return nil, http.StatusUnauthorized, fmt.Errorf("invalid username or password for user %q", name)
+	//}
+	//if u.denyHTTP && req.TLS == nil {
+	//	return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access via http", u.name)
+	//}
+	//if u.denyHTTPS && req.TLS != nil {
+	//	return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access via https", u.name)
+	//}
+	//if !u.allowedNetworks.Contains(req.RemoteAddr) {
+	//	return nil, http.StatusForbidden, fmt.Errorf("user %q is not allowed to access", u.name)
+	//}
 	if !cu.allowedNetworks.Contains(req.RemoteAddr) {
 		return nil, http.StatusForbidden, fmt.Errorf("cluster user %q is not allowed to access", cu.name)
 	}

@@ -80,6 +80,7 @@ func main() {
 		go serveTLS(server.HTTPS)
 	}
 	if len(server.HTTP.ListenAddr) != 0 {
+		// 如果配置走http，则走这里了。
 		go serve(server.HTTP)
 	}
 
@@ -136,7 +137,11 @@ func serveTLS(cfg config.HTTPS) {
 func serve(cfg config.HTTP) {
 	var h http.Handler
 	ln := newListener(cfg.ListenAddr)
+
+	// http.HandlerFunc(serveHTTP)将函数serveHTTP转换为http.Handler
+	// HandlerFunc实现了ServeHTTP方法
 	h = http.HandlerFunc(serveHTTP)
+	// 与证书有关
 	if cfg.ForceAutocertHandler {
 		if autocertManager == nil {
 			panic("BUG: autocertManager is not inited")
@@ -196,7 +201,11 @@ func listenAndServe(ln net.Listener, h http.Handler, cfg config.TimeoutCfg) erro
 
 var promHandler = promhttp.Handler()
 
+/**
+真正处理http请求位置
+ */
 func serveHTTP(rw http.ResponseWriter, r *http.Request) {
+	// 判断http 请求方式 是否支持
 	switch r.Method {
 	case http.MethodGet, http.MethodPost:
 		// Only GET and POST methods are supported.
@@ -230,6 +239,7 @@ func serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			an = allowedNetworksHTTPS.Load().(*config.Networks)
 			err = fmt.Errorf("https connections are not allowed from %s", r.RemoteAddr)
 		} else {
+			// 加载配置项中允许访问的网络地址
 			an = allowedNetworksHTTP.Load().(*config.Networks)
 			err = fmt.Errorf("http connections are not allowed from %s", r.RemoteAddr)
 		}
